@@ -89,21 +89,12 @@ io.on('connection', (socket) => {
     socket.join(roomId);
 });
 
-socket.on('send_message', (data) => {
-
-  io.to(data.roomId).emit('message', data.message);
-});
 socket.on('message', (data) => {
-  console.log(data,"===========")
   io.to(data.room).emit('message', data);
 });
 
-  socket.on('typing', ({ senderId, recipientId }) => {
-    socket.to(recipientId).emit('user_typing', { fromUserId: senderId });
-});
-
-socket.on('stop typing', ({ senderId, recipientId }) => {
-    socket.to(recipientId).emit('user_stopped_typing', { fromUserId: senderId });
+  socket.on('typing', ({ userId, roomId }) => {
+    io.to(roomId).emit("typing",{userId:userId});
 });
 
   socket.on('disconnect', () => {
