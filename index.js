@@ -1,13 +1,20 @@
-import dotenv from 'dotenv';
-import express from 'express';
-import jwt from 'jsonwebtoken';
-import http from 'http';
-import { Server } from 'socket.io';
-import cors from 'cors';
-import multer from 'multer';
-import path from 'path';
-import fs from 'fs';   
-import { fileURLToPath } from 'url';
+import dotenv from "dotenv";
+import express from "express";
+import jwt from "jsonwebtoken";
+import http from "http";
+import { Server } from "socket.io";
+import cors from "cors";
+import multer from "multer";
+import path from "path";
+import fs, { access } from "fs";
+import { fileURLToPath } from "url";
+import {
+  getAllUsers,
+  login,
+  signup,
+  createGroup,
+  getGroups,
+} from "./connections/dbHandler.js";
 
 dotenv.config();
 
@@ -17,51 +24,50 @@ app.use(express.json());
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/');
+    cb(null, "uploads/");
   },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + '-' + file.originalname.split(" ").join("_"));
+    cb(null, Date.now() + "-" + file.originalname.split(" ").join("_"));
   },
 });
 const upload = multer({ storage });
 
 const server = http.createServer(app);
 const io = new Server(server, {
+  connectionStateRecovery: {},
   cors: {
     origin: process.env.CORS_ORIGIN_ALLOWED_HOST,
     methods: ["GET", "POST"],
   },
 });
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
 const PORT = process.env.PORT || 3000;
-
-const usersDB = { '1': { username: '1', password: '1' }, '2': { username: '2', password: '2' }, '3': { username: '3', password: '3' }  }
 
 const authenticateJWT = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (authHeader) {
-    const token = authHeader.split(' ')[1];
+    const token = authHeader.split(" ")[1];
     jwt.verify(token, JWT_SECRET, (err, user) => {
       if (err) {
-        return res.sendStatus(403);
+        return res.status(403).send({message: "Unauthorized Access"});
       }
       req.user = user;
       next();
     });
   } else {
-    res.sendStatus(401);
+    res.sendStatus(403).send({message: "Unauthorized Access"});
   }
 };
 
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
   if (!token) {
-    return next(new Error('Authentication error'));
+    return next(new Error("Authentication error"));
   }
   jwt.verify(token, JWT_SECRET, (err, decoded) => {
     if (err) {
-      return next(new Error('Invalid token'));
+      return next(new Error("Invalid token"));
     }
     socket.user = decoded;
     next();
@@ -69,142 +75,159 @@ io.use((socket, next) => {
 });
 
 const users = new Map();
-const groups = new Map();
 
-io.on('connection', (socket) => {
+const validateAccess = async (userId, groupId) => {
+  if (groupId.includes("_")) {
+    const [id_1, id_2] = groupId.split("_");
+    if (id_1 == userId || id_2 == userId) return true;
+    else return false;
+  }
+  const groups = await getGroups(userId);
+  const groupExists = groups.some(group => group.group_id == groupId);
+  return groupExists;
+};
+
+io.on("connection", (socket) => {
   const userId = socket.user.id;
+  console.log(userId);
   users.set(userId, socket);
 
   console.log(`${userId} connected`);
 
-  socket.on('private_message', ({ toUserId, message, fileUri }) => {
-    const recipientSocket = users.get(toUserId);
-    if (recipientSocket) {
-      recipientSocket.emit('private_message', { from: userId, message, fileUri });
+  socket.on("join_group", async (groupId) => {
+    const access = await validateAccess(userId, groupId);
+    if (access) {
+      socket.join(groupId);
     } else {
-      socket.emit('private_message_error', { error: 'User not connected' });
+      socket.emit("unauthorized_access", { access: false });
+      users.delete(userId);
+      socket.disconnect();
     }
   });
-  socket.on('join_room', (roomId) => {
-    socket.join(roomId);
-});
 
-socket.on('message', (data) => {
-  io.to(data.room).emit('message', data);
-});
+  socket.on("message", (data) => {
+    data.msgStatus = "sent";
+    io.to(data.group).emit("message", data);
 
-  socket.on('typing', ({ userId, roomId }) => {
-    io.to(roomId).emit("typing",{userId:userId});
-});
+    io.to(data.group).emit("messageStatusUpdate", {
+      id: data.id,
+      msgStatus: "delivered",
+    });
+  });
 
-  socket.on('disconnect', () => {
+  socket.on("typing", ({ userId, groupId }) => {
+    io.to(groupId).emit("typing", { userId: userId });
+  });
+
+  socket.on("disconnect", () => {
     users.delete(userId);
     console.log(`${userId} disconnected`);
   });
 });
 
-app.post('/groups', authenticateJWT, (req, res) => {
-  const { name, userIds } = req.body;
+app.post("/groups", authenticateJWT, async (req, res) => {
+  const { groupName, userIds } = req.body;
   const currentUserId = req.user.id;
-
-  if (groups.has(name)) {
-    return res.status(400).json({ message: 'Group name already exists' });
+  if (!groupName || !Array.isArray(userIds) || userIds.length === 0) {
+    return res.status(400).json({ message: "Invalid request data" });
   }
-
-  if (!userIds.includes(currentUserId)) {
-    userIds.push(currentUserId); 
+  try {
+    const result = await createGroup(groupName, userIds, currentUserId);
+    return res.status(201).json(result);
+  } catch (error) {
+    console.log(error);
+    return res.status(500).json({
+      message: "Error creating group and adding members",
+      error: error,
+    });
   }
-
-  groups.set(name, {
-    members: userIds,
-  });
-
-  res.status(201).json({ message: 'Group created successfully', groupName: name });
 });
 
-app.get('/groups', authenticateJWT, (req, res) => {
-  const currentUserId = req.user.id; 
-  const userGroups = [];
-
-  groups.forEach((group, groupName) => {
-    if (group.members && group.members.includes(currentUserId)) {
-      userGroups.push({
-        groupName: groupName,
-        members: group.members, 
-      });
-    }
-  });
-  
-  res.status(200).json(userGroups);
+app.get("/groups", authenticateJWT, async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const groups = await getGroups(userId);
+    return res.status(200).send(groups);
+  } catch (error) {
+    return res.status(500).json({
+      message: "Error fetching user list",
+    });
+  }
 });
-app.post('/upload', authenticateJWT, upload.single('file'), (req, res) => {
+app.post("/upload", authenticateJWT, upload.single("file"), (req, res) => {
   if (!req.file) {
-    return res.status(400).json({ message: 'No file uploaded' });
+    return res.status(400).json({ message: "No file uploaded" });
   }
-  const fileUrl = `${req.protocol}://${req.get('host')}/file?name=${req.file.filename}`;
+  const fileUrl = `${req.protocol}://${req.get("host")}/file?name=${
+    req.file.filename
+  }`;
 
   res.status(200).json({
-    message: 'File uploaded successfully',
-    fileUrl: fileUrl 
+    message: "File uploaded successfully",
+    fileUrl: fileUrl,
   });
 });
 
-app.post('/signup', (req, res) => {
-  const { username, password } = req.body;
-  if (usersDB[username]) {
-    return res.status(400).json({ message: 'User already exists' });
+app.post("/signup", async (req, res) => {
+  const { username, password, name } = req.body;
+  try {
+    await signup(username, password, name);
+    res.status(201).json({ message: "User created successfully" });
+  } catch {
+    return res.status(400).json({ message: "User already exists" });
   }
-  usersDB[username] = { username, password };
-  res.status(201).json({ message: 'User created successfully' });
 });
 
-app.post('/login', (req, res) => {
+app.post("/login", async (req, res) => {
   const { username, password } = req.body;
-  const user = usersDB[username];
-  if (!user || user.password !== password) {
-    return res.status(400).json({ message: 'Invalid credentials' });
+  const user = await login(username, password);
+  if (user == null) {
+    return res.status(400).json({ message: "Invalid credentials" });
   }
-  const token = jwt.sign({ id: username }, JWT_SECRET, { expiresIn: '1h' });
-  res.json({token: token, userId: username });
+  const token = jwt.sign({ id: user.id }, JWT_SECRET, {
+    expiresIn: "1h",
+  });
+  res.json({
+    token: token,
+    userId: user.id,
+    name: user.name,
+    userName: user.username,
+  });
 });
 
-app.get('/users', authenticateJWT, (req, res) => {
-  const currentUserId = req.user.id;
-  
-  const users = Object.keys(usersDB)
-    .filter((key) => key !== currentUserId)
-    .map((key) => ({
-      id: key, 
-      username: usersDB[key].username,
-    }));
-  
-  res.status(200).json(users); 
+app.get("/users", authenticateJWT, async (req, res) => {
+  try {
+    const currentUserId = req.user.id;
+    const users = await getAllUsers(currentUserId);
+    res.status(200).json(users);
+  } catch (error) {
+    res.status(500).send({ error: "Error fetching users!" });
+  }
 });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-app.get('/file', (req, res) => {
+app.get("/file", (req, res) => {
   const { name } = req.query;
   if (!name) {
-    return res.status(400).json({ message: 'Filename is required' });
+    return res.status(400).json({ message: "Filename is required" });
   }
 
-  const filePath = path.join(__dirname, 'uploads', name);
+  const filePath = path.join(__dirname, "uploads", name);
 
   fs.stat(filePath, (err) => {
     if (err) {
-      return res.status(404).json({ message: 'File not found' });
+      return res.status(404).json({ message: "File not found" });
     }
 
     res.sendFile(filePath, (err) => {
       if (err) {
-        res.status(500).json({ message: 'Error sending the file' });
+        res.status(500).json({ message: "Error sending the file" });
       }
     });
   });
 });
-
 
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

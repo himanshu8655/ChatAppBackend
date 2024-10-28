@@ -1,0 +1,43 @@
+CREATE SCHEMA IF NOT EXISTS chatapp;
+USE chatapp;
+
+CREATE TABLE IF NOT EXISTS Users (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(255) UNIQUE NOT NULL,
+  password VARCHAR(255) NOT NULL,
+  name VARCHAR(255) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS Group_Details (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  admin_id INT NOT NULL,
+  FOREIGN KEY (admin_id) REFERENCES Users(id)
+);
+
+CREATE TABLE IF NOT EXISTS Group_Members (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  group_id INT NOT NULL,
+  user_id INT NOT NULL,
+  FOREIGN KEY (group_id) REFERENCES Group_Details(id),
+  FOREIGN KEY (user_id) REFERENCES Users(id)
+);
+
+CREATE TABLE IF NOT EXISTS Messages (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  sender_id INT NOT NULL,
+  group_id INT,
+  content TEXT NOT NULL,
+  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  msgStatus ENUM('sent', 'delivered', 'read'),
+  FOREIGN KEY (sender_id) REFERENCES Users(id),
+  FOREIGN KEY (group_id) REFERENCES Group_Details(id)
+);
+
+CREATE TABLE IF NOT EXISTS Files (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  message_id INT NOT NULL,
+  file BLOB NOT NULL,
+  filename VARCHAR(255) NOT NULL,
+  FOREIGN KEY (message_id) REFERENCES Messages(id)
+);
