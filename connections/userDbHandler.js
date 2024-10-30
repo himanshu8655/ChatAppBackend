@@ -1,4 +1,4 @@
-import pool from "../connections/database.js";
+import pool from "./database.js";
 
 export const getAllUsers = async (currentUserId) => {
   const connection = await pool.getConnection();
@@ -16,34 +16,6 @@ export const getAllUsers = async (currentUserId) => {
   }
 };
 
-export const login = async (username, password) => {
-  const connection = await pool.getConnection();
-  try {
-    const [rows] = await connection.query(
-      "SELECT * FROM Users where username = ? and password = ?",
-      [username, password]
-    );
-    return rows.length == 0 ? null : rows[0];
-  } catch (error) {
-    console.error("Error fetching users:", error);
-    throw error;
-  } finally {
-    connection.release();
-  }
-};
-
-export const signup = async (username, password, name) => {
-  const query = `INSERT INTO Users (username, password, name) VALUES (?, ?, ?)`;
-
-  try {
-    const [result] = await pool.execute(query, [username, password, name]);
-    return result.insertId;
-  } catch (error) {
-    console.error("Database error:", error);
-    throw error;
-  }
-};
-
 export const getGroups = async (userId) => {
   const connection = await pool.getConnection();
   try {
@@ -52,7 +24,7 @@ export const getGroups = async (userId) => {
         FROM Group_Details gd
         JOIN Group_Members gm ON gd.id = gm.group_id
         WHERE gm.user_id = ?;`,
-  [userId]
+      [userId]
     );
     return rows;
   } catch (error) {
@@ -60,7 +32,6 @@ export const getGroups = async (userId) => {
     throw error;
   } finally {
     connection.release();
-
   }
 };
 
@@ -87,5 +58,17 @@ export const createGroup = async (groupName, userIds, adminId) => {
     throw error;
   } finally {
     if (connection) connection.release();
+  }
+};
+
+export const storeMessages = async (sender, groupId, content) => {
+  const query = `INSERT INTO Messages (sender_id, group_id, content, timestamp, msgStatus) VALUES (?, ?, ?, ?, ?)`;
+
+  try {
+    const [result] = await pool.execute(query, [sender, groupId, content, new Date(), "delivered"]);
+    return result.insertId;
+  } catch (error) {
+    console.error("Database error:", error);
+    throw error;
   }
 };

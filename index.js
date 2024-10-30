@@ -10,11 +10,12 @@ import fs, { access } from "fs";
 import { fileURLToPath } from "url";
 import {
   getAllUsers,
-  login,
-  signup,
   createGroup,
   getGroups,
-} from "./connections/dbHandler.js";
+  storeMessages,
+} from "./connections/userDbHandler.js";
+import { login, signup } from "./connections/authDbHandler.js";
+import NodeRSA from "node-rsa";
 
 dotenv.config();
 
@@ -36,7 +37,7 @@ const server = http.createServer(app);
 const io = new Server(server, {
   connectionStateRecovery: {},
   cors: {
-    origin: process.env.CORS_ORIGIN_ALLOWED_HOST,
+    origin: process.env.CORS_ORIGIN_ALLOWED_HOST.split(","),
     methods: ["GET", "POST"],
   },
 });
@@ -50,13 +51,13 @@ const authenticateJWT = (req, res, next) => {
     const token = authHeader.split(" ")[1];
     jwt.verify(token, JWT_SECRET, (err, user) => {
       if (err) {
-        return res.status(403).send({message: "Unauthorized Access"});
+        return res.status(403).send({ message: "Unauthorized Access" });
       }
       req.user = user;
       next();
     });
   } else {
-    res.sendStatus(403).send({message: "Unauthorized Access"});
+    res.sendStatus(403).send({ message: "Unauthorized Access" });
   }
 };
 
@@ -83,7 +84,7 @@ const validateAccess = async (userId, groupId) => {
     else return false;
   }
   const groups = await getGroups(userId);
-  const groupExists = groups.some(group => group.group_id == groupId);
+  const groupExists = groups.some((group) => group.group_id == groupId);
   return groupExists;
 };
 
@@ -106,13 +107,16 @@ io.on("connection", (socket) => {
   });
 
   socket.on("message", (data) => {
+    console.log(data)
+    //storeMessages(data)
     data.msgStatus = "sent";
+    console.log(data);
     io.to(data.group).emit("message", data);
-
     io.to(data.group).emit("messageStatusUpdate", {
       id: data.id,
       msgStatus: "delivered",
     });
+    
   });
 
   socket.on("typing", ({ userId, groupId }) => {
@@ -123,6 +127,17 @@ io.on("connection", (socket) => {
     users.delete(userId);
     console.log(`${userId} disconnected`);
   });
+});
+
+app.get("/test", async (req, res) => {
+  try {
+    const key = new NodeRSA({ b: 2048 });
+    const publicKey = key.exportKey("public");
+    const privateKey = key.exportKey("private");
+    res.json({ message: "working", keyPair: { publicKey, privateKey } });
+  } catch (error) {
+    res.status(500).json({ message: "Error generating keys", error });
+  }
 });
 
 app.post("/groups", authenticateJWT, async (req, res) => {
@@ -169,11 +184,13 @@ app.post("/upload", authenticateJWT, upload.single("file"), (req, res) => {
 });
 
 app.post("/signup", async (req, res) => {
-  const { username, password, name } = req.body;
+  const { username, password, name, publickey} = req.body;
   try {
-    await signup(username, password, name);
-    res.status(201).json({ message: "User created successfully" });
-  } catch {
+    const userId = await signup(username, password, name, publickey);
+    const jwtResponse = generateJwtTokenResponse(userId, username, name)
+    res.status(201).json(jwtResponse);
+  } catch (error) {
+    console.log(error)
     return res.status(400).json({ message: "User already exists" });
   }
 });
@@ -184,16 +201,22 @@ app.post("/login", async (req, res) => {
   if (user == null) {
     return res.status(400).json({ message: "Invalid credentials" });
   }
-  const token = jwt.sign({ id: user.id }, JWT_SECRET, {
+  const jwtResponse = generateJwtTokenResponse(user.id, user.username, user.name)
+  return res.status(200).json(jwtResponse)
+});
+
+const generateJwtTokenResponse = (userId, userName, name) => {
+  const token = jwt.sign({ id: userId }, JWT_SECRET, {
     expiresIn: "1h",
   });
-  res.json({
+  const res = {
     token: token,
-    userId: user.id,
-    name: user.name,
-    userName: user.username,
-  });
-});
+    userId: userId,
+    name: name,
+    userName: userName
+  }
+  return res;
+};
 
 app.get("/users", authenticateJWT, async (req, res) => {
   try {
