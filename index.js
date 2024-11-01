@@ -13,6 +13,8 @@ import {
   createGroup,
   getGroups,
   storeMessages,
+  getMissingMessages,
+  deleteMessageById,
 } from "./connections/userDbHandler.js";
 import { login, signup } from "./connections/authDbHandler.js";
 import NodeRSA from "node-rsa";
@@ -94,11 +96,23 @@ io.on("connection", (socket) => {
   users.set(userId, socket);
 
   console.log(`${userId} connected`);
-
-  socket.on("join_group", async (groupId) => {
-    const access = await validateAccess(userId, groupId);
+  socket.on("join_group", async (data) => {
+    const access = await validateAccess(userId, data.room_id);
     if (access) {
-      socket.join(groupId);
+      socket.join(data.room_id);
+      console.log("offet", data.clientOffset);
+      const missingMessages = await getMissingMessages(
+        data.room_id,
+        data.clientOffset
+      );
+      missingMessages.forEach((message) => {
+        message.from = message.from_user;
+        message.isFile = message.is_file;
+        message.group = message.group_id;
+        message.msgStatus = message.msg_status;
+        message.newMessage = false;
+        io.to(message.group).emit("message", message);
+      });
     } else {
       socket.emit("unauthorized_access", { access: false });
       users.delete(userId);
@@ -106,23 +120,31 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("message", (data) => {
-    console.log(data)
-    //storeMessages(data)
-    data.msgStatus = "sent";
-    console.log(data);
+  socket.on("message", async (data) => {
+    data.msgStatus = "read";
+    const result = await storeMessages(data);
+    data.id = result;
     io.to(data.group).emit("message", data);
     io.to(data.group).emit("messageStatusUpdate", {
       id: data.id,
       msgStatus: "delivered",
     });
-    
   });
 
   socket.on("typing", ({ userId, groupId }) => {
     io.to(groupId).emit("typing", { userId: userId });
   });
 
+  socket.on("admin_control", ({ type, messageId, userId, groupId }) => {
+    if (type == "delete") {
+      deleteMessageById(messageId);
+      io.to(groupId).emit("admin_control", { type, messageId, userId });
+    }
+
+    if(type == "edit"){
+
+    }
+  });
   socket.on("disconnect", () => {
     users.delete(userId);
     console.log(`${userId} disconnected`);
@@ -150,7 +172,6 @@ app.post("/groups", authenticateJWT, async (req, res) => {
     const result = await createGroup(groupName, userIds, currentUserId);
     return res.status(201).json(result);
   } catch (error) {
-    console.log(error);
     return res.status(500).json({
       message: "Error creating group and adding members",
       error: error,
@@ -184,13 +205,12 @@ app.post("/upload", authenticateJWT, upload.single("file"), (req, res) => {
 });
 
 app.post("/signup", async (req, res) => {
-  const { username, password, name, publickey} = req.body;
+  const { username, password, name, publickey } = req.body;
   try {
     const userId = await signup(username, password, name, publickey);
-    const jwtResponse = generateJwtTokenResponse(userId, username, name)
+    const jwtResponse = generateJwtTokenResponse(userId, username, name);
     res.status(201).json(jwtResponse);
   } catch (error) {
-    console.log(error)
     return res.status(400).json({ message: "User already exists" });
   }
 });
@@ -201,8 +221,12 @@ app.post("/login", async (req, res) => {
   if (user == null) {
     return res.status(400).json({ message: "Invalid credentials" });
   }
-  const jwtResponse = generateJwtTokenResponse(user.id, user.username, user.name)
-  return res.status(200).json(jwtResponse)
+  const jwtResponse = generateJwtTokenResponse(
+    user.id,
+    user.username,
+    user.name
+  );
+  return res.status(200).json(jwtResponse);
 });
 
 const generateJwtTokenResponse = (userId, userName, name) => {
@@ -213,8 +237,8 @@ const generateJwtTokenResponse = (userId, userName, name) => {
     token: token,
     userId: userId,
     name: name,
-    userName: userName
-  }
+    userName: userName,
+  };
   return res;
 };
 

@@ -25,17 +25,6 @@ CREATE TABLE IF NOT EXISTS Group_Members (
   FOREIGN KEY (user_id) REFERENCES Users(id)
 );
 
-CREATE TABLE IF NOT EXISTS Messages (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  sender_id INT NOT NULL,
-  group_id INT,
-  content TEXT NOT NULL,
-  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  msgStatus ENUM('sent', 'delivered', 'read'),
-  FOREIGN KEY (sender_id) REFERENCES Users(id),
-  FOREIGN KEY (group_id) REFERENCES Group_Details(id)
-);
-
 CREATE TABLE IF NOT EXISTS Files (
   id INT AUTO_INCREMENT PRIMARY KEY,
   message_id INT NOT NULL,
@@ -43,3 +32,13 @@ CREATE TABLE IF NOT EXISTS Files (
   filename VARCHAR(255) NOT NULL,
   FOREIGN KEY (message_id) REFERENCES Messages(id)
 );
+CREATE TABLE IF NOT EXISTS messages (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  from_user VARCHAR(255) NOT NULL,
+  message TEXT NOT NULL,
+  is_file BOOLEAN NOT NULL,
+  group_id VARCHAR(255) NOT NULL,
+  msg_status ENUM('sent', 'delivered', 'read') NOT NULL,
+  client_offset INT PRIMARY KEY
+);
+
