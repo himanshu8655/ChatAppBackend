@@ -61,14 +61,63 @@ export const createGroup = async (groupName, userIds, adminId) => {
   }
 };
 
-export const storeMessages = async (sender, groupId, content) => {
-  const query = `INSERT INTO Messages (sender_id, group_id, content, timestamp, msgStatus) VALUES (?, ?, ?, ?, ?)`;
-
+export const storeMessages = async (message) => {
+  const connection = await pool.getConnection();
   try {
-    const [result] = await pool.execute(query, [sender, groupId, content, new Date(), "delivered"]);
+    const query = `
+      INSERT INTO messages (from_user, message, is_file, msg_status, group_id, client_offset)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `;
+    const [result] = await connection.query(query, [
+      message.from,
+      message.message,      
+      message.isFile,       
+      message.msgStatus,   
+      message.group,       
+      message.clientOffset
+    ]);
     return result.insertId;
   } catch (error) {
-    console.error("Database error:", error);
+    console.error("Error storing message:", error);
     throw error;
+  } finally {
+    connection.release();
   }
 };
+
+
+export const getMissingMessages = async (groupId, clientOffset) => {
+  const connection = await pool.getConnection();
+  try {
+    const query = `
+      SELECT * FROM messages 
+      WHERE group_id = ? 
+      ORDER BY id ASC
+    `;
+    const [rows] = await connection.query(query, [groupId]);
+    return rows;
+  } catch (error) {
+    console.error("Error fetching missing messages:", error);
+    throw error;
+  } finally {
+    connection.release();
+  }
+};
+
+export const deleteMessageById = async (messageId) => {
+  const connection = await pool.getConnection();
+  try {
+    const query = `
+      DELETE FROM messages 
+      WHERE id = ?
+    `;
+    const [result] = await connection.query(query, [messageId]);
+    return result.affectedRows > 0;
+  } catch (error) {
+    console.error("Error deleting message:", error);
+    throw error;
+  } finally {
+    connection.release();
+  }
+};
+
